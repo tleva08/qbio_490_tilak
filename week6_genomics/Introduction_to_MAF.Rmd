@@ -1,0 +1,203 @@
+---
+title: "Introduction to MAF"
+author: Joshua Lin, Christopher Kim, Erika Li, Jeanne Revilla, Mahija Mogalipuvvu, adapted from Nicole Black, Wade Boohar
+date: 07/17/22
+updated: 10/12/2026
+---
+
+***Deliverables***
+- upload this R Notebook to your GitHub and submit the link to your Repo on Brightspace
+- include ALL graphs or figures created in this assignment in a folder with your R notebook with descriptive file names.
+
+We encourage you to work with a partner. Therefore, it is okay if your answers are the same as your partner’s as long as everyone understands it and could explain it in their own words if asked. Each person must individually push their code to Github. *If you do work with a partner, at the top of your R Notebook, write the name of you and your partner(s) as a comment.*
+
+***Complete the following coding activity and answer any following questions as comments in your R Notebook***
+
+In this assignment, you will need to use your skills learned in class to demonstrate your understanding of categorical variables and R data structures.
+
+*Pre-Assignment*
+Load all necessary packages, read in the clinical data.csv file you have in your analysis_data folder, and instantiate the MAF_object.
+
+```{r setup}
+knitr::opts_knit$set(root.dir = normalizePath("/home1/tleva/490_cluster/analysis_data"))
+```
+
+```{r}
+library(BiocManager)
+library(TCGAbiolinks)
+library(maftools)
+
+clinical <- read.csv("brca_clinical_data.csv")
+
+colnames(clinical)[ colnames(clinical) == "bcr_patient_barcode" ] <- "Tumor_Sample_Barcode"
+
+maf_query <- GDCquery(
+  project = "TCGA-BRCA",
+  data.category = "Simple Nucleotide Variation",
+  access = "open",
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+maf <- GDCprepare(maf_query)
+
+maf_object <- read.maf(maf = maf,
+                       clinicalData = clinical, # <- this is where our clinical data goes
+                       isTCGA = TRUE)
+
+saveRDS(maf_object, file = "demo_maf_object.rds")
+maf_object = readRDS("demo_maf_object.rds")
+```
+
+It's useful to save your MAF_object, so that you don't have to go through the trouble of querying and preparing it everytime. The saveRDS function allows us to save an R object, allowing us to access it directly from our files. 
+```{r}
+saveRDS(fill in with name of your MAF_object, file = "/path/to/analysis_data/maf_object.rds")
+# ex. saveRDS(MAF_object, file = "/home1/yourname/490_cluster/analysis_data/maf_object.rds")
+
+saveRDS(maf_object, file = "demo_maf_object.rds")
+```
+
+When you reopen a new R session and want to access your MAF_object, you can use the readRDS function to load the object back into a new variable.
+```{r}
+MAF_object <- readRDS(file = "/path/to/analysis_data/maf_object.rds")
+# ex. MAF_object <- readRDS(file = "/home1/yourname/490_cluster/analysis_data/maf_object.rds")
+
+maf_object <- readRDS("demo_maf_object.rds")
+```
+
+*1*
+Choose a clinical variable (or any variable from clin_rad or clin_drug) to separate your populations into two different groups and rewrite the column or create a new column with that variable as a factor. ***Do not use age or vital_status as your clinical variable.*** Hint: if your variable is continuous, you will need to determine your own cutoffs for the different levels of the factor. If your variable is categorical and has more than two possible values, choose the two that are the most common.
+```{r}
+# Making mask 
+er_positive_mask <- ifelse(clinical$er_status_by_ihc == "Positive", T, F)
+# New column made for ER Group
+clinical$er_group <- factor(
+  ifelse(
+    clinical$er_status_by_ihc %in% c("Positive", "Negative"),
+    clinical$er_status_by_ihc,
+    NA_character_
+  ),
+  levels = c("Positive", "Negative")
+)
+
+# Obtaining Barcode for members of each group
+er_positive_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[er_positive_mask]
+er_negative_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[!er_positive_mask]
+
+er_positive_object <- subsetMaf(maf = maf_object,
+                         tsb = er_positive_barcodes)
+
+er_negative_object <- subsetMaf(maf = maf_object,
+                                tsb = er_negative_barcodes)
+```
+
+
+*2*
+Create a co-oncoplot with the top 10-20 (you choose) most mutated genes for the two groups. Pick one that has a large discrepancy in % mutated or type of mutations between the groups and research it. 
+Research it. What is the gene used for? Can you think of any reason for the discrepancy?
+```{r}
+coOncoplot(m1 = er_positive_object,
+           m1Name = "ER Positive",
+           m2 = er_negative_object,
+           m2Name = "ER Negative",
+           gene_mar = 2
+)
+
+# PIK3CA is a human gene that encodes the p110alpha subunit for the protein PIK3, which is an enzyme. Mutations in the PIK3CA gene results in the PIK3 enzyme being permanently turned "on", which sends signals to cells to continuously proliferate. The ER IHC positive cell lines typically rely on the estrogen hormone to bind to the receptor to enable these cells to grow, which can often be pretty slow in comparison to the ER IHC negative ones as they do not rely on estrogen binding. This makes sense then that the proliferation mutation occurs more in the ER negative line as it will speed up the already fast cell cycle and make it become a cancerous cell as its growth goes unregulated by the estrogen binding.  
+
+```
+
+
+*3*
+Create a contingency table with your variable and chosen gene. Run a Fisher’s Exact Test between presence of mutations for that gene and your clinical variable. Create and save a mosaic plot. 
+Interpret the output of the Fisher’s Exact Test in terms of the odds ratio and p-value.
+```{r}
+PIK3CA_maf = subsetMaf(maf = maf_object,
+                     genes = "PIK3CA")
+
+# use PIK3CA_maf to label patients by whether or not they have a mutation
+mutation_status = ifelse(maf_object@clinical.data$Tumor_Sample_Barcode %in% PIK3CA_maf@clinical.data$Tumor_Sample_Barcode,
+                         "mutation", "no_mutation")
+
+contingency_table = table(Mutation = mutation_status,
+  ER_status = clinical$er_group
+)
+
+# Code below to match amount of entries as they initially did not align
+maf_patient_ids <- substr(
+  maf_object@clinical.data$Tumor_Sample_Barcode, 1, 12
+)
+
+matched_rows <- match(
+  maf_patient_ids,
+  clinical$Tumor_Sample_Barcode
+)
+
+er_status <- factor(
+  clinical$er_status_by_ihc[matched_rows],
+  levels = c("Positive", "Negative")
+)
+
+# Create contingency table
+contingency_table <- table(
+  Mutation = mutation_status,
+  ER_status = er_status
+)
+
+contingency_table
+
+#                   ER_status
+# Mutation      Positive Negative
+#  mutation         280       33
+#  no_mutation      431      178
+
+fisher.test(contingency_table)
+#	Fisher's Exact Test for Count Data
+#
+# data:  contingency_table
+# p-value = 3.469e-11
+# alternative hypothesis: true odds ratio is not equal to 1
+# 95 percent confidence interval:
+# 2.323592 5.401487
+# sample estimates:
+# odds ratio 
+#   3.50009
+
+# Fisher's exact test gives us an odds ratio which can help us establish a relatoinship between our two selected variables of mutation status and ER IHC status. With the odds ratio of 3.50009, this tells us that mutation frequencies are 3.50009 times higher in ER positive patients than in ER negative patients. Since the p-value of 3.469e-11 is less than the significance value of 0.05, we can reject the null hypothesis and believe that there is a statistically significant relationship between mutation status and ER IHC status.
+
+png("mosaic_plot.png", width = 800, height = 600)
+
+mosaicplot(contingency_table)
+
+```
+
+
+*4*
+Subset your maf_object based on your chosen clinical variable and create a co-lollipop plot of your chosen gene divided between the two different clinical variable possibilities. Include descriptive names on your plot.
+Do you notice any difference in terms of mutations (e.g. sites, types, number) between the two populations?
+```{r}
+lollipopPlot2(m1 = er_positive_object,
+              m2 = er_negative_object,
+              m1_name = "ER Positive",
+              m2_name = "ER Negative",
+              gene = "PIK3CA"
+)
+
+# There are few major differences in the frequency of PIK3CA mutations between the ER positive and negative groups. As seen through the lollipops, the two really large spikes on both sides appear similar, however, the scale on the top is larger as it goes to 89, meaning that those two mutations at the PI3Ka_I and PI3Kc_IA genes are almost 3 times more frequent in the ER positive group than the ER negative group. This large difference in frequency can maybe be attributed to the differences in sample sizes as the ER positive group is also 3 times as large as the ER negative group.
+```
+
+
+*5*
+Create your Overall_Survival_Status column and create a mafSurvival KM plot based on mutations in your chosen gene.
+Does there seem to be a difference? Hypothesize why or not based on the other analysis you did with the gene above.
+```{r}
+my_maf = maf_object
+my_maf@clinical.data$vital_status_bool = ifelse(my_maf@clinical.data$vital_status == "Alive", T, F)
+
+mafSurvival(maf = my_maf,
+            genes = "PIK3CA",
+            time = "last_contact_days_to",
+            Status = "vital_status_bool")
+
+# There does not seem to be a statistically significant difference as the curves are overlapping each other over the entire period and the p-value is 0.755. This is differnet from the results obtained earlier as the Fisher's test results showed significant results with an extremely small p-value. However, thinking proportionately from the co-oncoplot, the percentage of mutations occuring were very similar in both groups so we probably have no correlation between the ER status and mutations and death.
+```
